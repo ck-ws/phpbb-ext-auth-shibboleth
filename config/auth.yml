@@ -1,0 +1,13 @@
+services:
+    auth.provider.shibboleth:
+        class: ckws\authshibboleth\auth\provider\shibboleth
+        arguments:
+            - @dbal.conn
+            - @config
+            - @passwords.manager
+            - @request
+            - @user
+            - %core.root_path%
+            - %core.php_ext%
+        tags:
+            - { name: auth.provider }

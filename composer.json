@@ -1,0 +1,24 @@
+{
+	"name": "ckws/authshibboleth",
+	"type": "phpbb-extension",
+	"description": "Allows authentication in phpBB using Shibboleth (Shibboleth 2 SP)",
+	"homepage": "https://github.com/ck-ws/phpbb-ext-auth-shibboleth",
+	"version": "1.0.0-dev",
+	"license": "BSD-2-Clause",
+	"authors": [
+		{
+			"name": "Christoph Kreutzer",
+			"homepage": "https://github.com/ck-ws/",
+			"role": "Lead Developer"
+		}
+	],
+	"require": {
+		"php": ">=5.3.3"
+	},
+	"extra": {
+		"display-name": "Auth Shibboleth",
+		"soft-require": {
+			"phpbb/phpbb": "3.1.*"
+		}
+	}
+}
