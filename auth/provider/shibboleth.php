@@ -9,12 +9,11 @@
 namespace ckws\authshibboleth\auth\provider;
 
 use phpbb\request\request_interface;
-use phpbb\auth\provider\base as baseProvider;
 
 /**
 * Shibboleth authentication provider for phpBB 3.1
 */
-class shibboleth extends baseProvider
+class shibboleth extends \phpbb\auth\provider\base
 {
 	/**
 	 * phpBB database driver
@@ -29,13 +28,6 @@ class shibboleth extends baseProvider
 	 * @var \phpbb\config\config
 	 */
 	protected $config;
-
-	/**
-	 * phpBB passwords manager
-	 *
-	 * @var \phpbb\passwords\manager
-	 */
-	protected $passwords_manager;
 
 	/**
 	 * phpBB request object
@@ -74,10 +66,10 @@ class shibboleth extends baseProvider
 
 	/**
 	 * Shibboleth Authentication Constructor
+	 *  - called when instance of this class is created
 	 *
 	 * @param	\phpbb\db\driver\driver_interface	$db					Database object
 	 * @param	\phpbb\config\config 				$config				Config object
-	 * @param	\phpbb\passwords\manager			$passwords_manager	Passwords Manager object
 	 * @param	\phpbb\request\request 				$request			Request object
 	 * @param	\phpbb\user 						$user				User object
 	 * @param	string 								$phpbb_root_path	Relative path to phpBB root
@@ -86,7 +78,6 @@ class shibboleth extends baseProvider
 	public function __construct(
 		\phpbb\db\driver\driver_interface $db,
 		\phpbb\config\config $config,
-		\phpbb\passwords\manager $passwords_manager,
 		\phpbb\request\request $request,
 		\phpbb\user $user,
 		$phpbb_root_path,
@@ -95,23 +86,29 @@ class shibboleth extends baseProvider
 	{
 		$this->db = $db;
 		$this->config = $config;
-		$this->passwords_manager = $passwords_manager;
 		$this->request = $request;
 		$this->user = $user;
 		$this->phpbb_root_path = $phpbb_root_path;
 		$this->php_ext = $php_ext;
 
 		$this->settings['user'] = (empty($this->config['shibboleth_user_attribute'])) ? 'REMOTE_USER' : $this->config['shibboleth_user_attribute'];
-		$this->settings['handlerBase'] = '/Shibboleth.sso/';
-		$this->settings['loginHandler'] = 'Login';
-		$this->settings['logoutHandler'] = 'Logout';
+		$this->settings['handler_base'] = (empty($this->config['shibboleth_handler_base'])) ? '/Shibboleth.sso/' : $this->config['shibboleth_handler_base'];
+		$this->settings['login_handler'] = (empty($this->config['shibboleth_login_handler'])) ? 'Login' : $this->config['shibboleth_login_handler'];
+		$this->settings['logout_handler'] = (empty($this->config['shibboleth_logout_handler'])) ? 'Logout' : $this->config['shibboleth_logout_handler'];
+		$this->settings['redirect_after_logout'] = (empty($this->config['shibboleth_redirect_after_logout'])) ? null : $this->config['shibboleth_redirect_after_logout'];
+
+
+		$this->user->add_lang_ext('ckws/authshibboleth', 'common');
+		$this->user->add_lang_ext('ckws/authshibboleth', 'acp/board');
 	}
 
 	/**
 	 * {@inheritdoc}
+	 * - called when authentication method is enabled
 	 */
 	public function init()
 	{
+		// check if user is currently authenticated via Shibboleth to prevent lock out
 		if(
 			!$this->request->is_set($this->settings['user'], request_interface::SERVER)
 			|| $this->user->data['username'] !== htmlspecialchars_decode($this->request->server($this->settings['user']))
@@ -125,6 +122,7 @@ class shibboleth extends baseProvider
 
 	/**
 	 * {@inheritdoc}
+	 * - called when login form is submitted
 	 */
 	public function login($username = null, $password = null)
 	{
@@ -138,9 +136,7 @@ class shibboleth extends baseProvider
 			&& $this->request->server('AUTH_TYPE') === 'Shibboleth'
 		)
 		{
-			$sql = 'SELECT user_id, username, user_password, user_passchg, user_email, user_type
-					FROM ' . USERS_TABLE . "
-					WHERE username = '" . $this->db->sql_escape($shib_user) . "'";
+			$sql = sprintf('SELECT user_id, username, user_password, user_passchg, user_email, user_type FROM %1$s WHERE username = \'%2$s\'', USERS_TABLE, $this->db->sql_escape($shib_user));
 			$result = $this->db->sql_query($sql);
 			$row = $this->db->sql_fetchrow($result);
 			$this->db->sql_freeresult($result);
@@ -184,6 +180,7 @@ class shibboleth extends baseProvider
 
 	/**
 	 * {@inheritdoc}
+	 - called when new session is created
 	 */
 	public function autologin()
 	{
@@ -197,9 +194,7 @@ class shibboleth extends baseProvider
 		{
 			set_var($shib_user, $shib_user, 'string', true);
 
-			$sql = 'SELECT *
-					FROM ' . USERS_TABLE . "
-					WHERE username = '" . $this->db->sql_escape($shib_user) . "'";
+			$sql = sprintf('SELECT * FROM %1$s WHERE username = \'%2$s\'', USERS_TABLE, $this->db->sql_escape($shib_user));
 			$result = $this->db->sql_query($sql);
 			$row = $this->db->sql_fetchrow($result);
 			$this->db->sql_freeresult($result);
@@ -242,6 +237,7 @@ class shibboleth extends baseProvider
 
 	/**
 	 * {@inheritdoc}
+	 * - called on every request when session is active
 	 */
 	public function validate_session($user)
 	{
@@ -249,10 +245,16 @@ class shibboleth extends baseProvider
 		if(
 			$this->request->is_set($this->settings['user'], request_interface::SERVER)
 			&& $this->request->server('AUTH_TYPE') === 'Shibboleth'
-			&& $user['username'] === $this->request->server($this->settings['user'])
+			&& $user['username'] === htmlspecialchars_decode($this->request->server($this->settings['user']))
 		)
 		{
 			return true;
+		}
+
+		// if the user is Shibboleth auth'd but first case did not fire, he isn't logged in to phpBB - invalidate his session so autologin() is called ;)
+		if($this->request->server('AUTH_TYPE') === 'Shibboleth')
+		{
+			return false;
 		}
 
 		// if the user type is ignore, then it's probably an anonymous user or a bot
@@ -261,46 +263,75 @@ class shibboleth extends baseProvider
 			return true;
 		}
 
-		// no case matched, drop this
+		// no case matched, shouldn't occur...
 		return false;
 	}
 
 	/**
 	 * {@inheritdoc}
+	 * - called when user logs out
+	 */
+	public function logout($data, $new_session)
+	{
+		// the SP's login handler
+		$shib_sp_url = sprintf('%s%s', $this->settings['handler_base'], $this->settings['logout_handler']);
+
+		redirect($shib_sp_url, false, true);
+	}
+
+	/**
+	 * {@inheritdoc}
+	 * - should return custom configuration options
 	 */
 	public function acp()
 	{
-		// These are required fields in the config table
+		// these are fields in the config for this auth provider
 		return array(
 			'shibboleth_user_attribute',
+			'shibboleth_handler_base',
+			'shibboleth_login_handler',
+			'shibboleth_logout_handler',
 		);
 	}
 
 	/**
 	 * {@inheritdoc}
+	 * - should return configuration options template
 	 */
 	public function get_acp_template($new_config)
 	{
 		return array(
-			'TEMPLATE_FILE'	=> 'auth_provider_shibboleth.html',
+			'TEMPLATE_FILE'	=> '@ckws_authshibboleth/auth_provider_shibboleth.html',
 			'TEMPLATE_VARS'	=> array(
-				'AUTH_SHIBBOLETH_USER'	=> $new_config['shibboleth_user_attribute'],
+				'AUTH_SHIBBOLETH_USER'				=> $new_config['shibboleth_user_attribute'],
+				'AUTH_SHIBBOLETH_HANDLERBASE'		=> $new_config['shibboleth_handler_base'],
+				'AUTH_SHIBBOLETH_LOGINHANDLER'		=> $new_config['shibboleth_login_handler'],
+				'AUTH_SHIBBOLETH_LOGOUTHANDLER'		=> $new_config['shibboleth_logout_handler'],
 			),
 		);
 	}
 
 	/**
 	* {@inheritdoc}
+	* - should return additional template data for login form
 	*/
 	public function get_login_data()
 	{
-		$phpbbUrl = append_sid(generate_board_url() . '/index.' . $this->php_ext, false, false);
-		$shibSpUrl = sprintf('%s%s?target=%s', $this->settings['handlerBase'], $this->settings['loginHandler'], urlencode($phpbbUrl));
+		// if user is not authenticated via Shibboleth, we send him to the SP for logging in
+		if($this->request->server('AUTH_TYPE') !== 'Shibboleth')
+		{
+			//page to send back to (forum index)
+			$phpbb_url = append_sid(sprintf('%s/%s.%s', generate_board_url(), 'index', $this->php_ext), false, false);
+			// the SP's login handler
+			$shib_sp_url = sprintf('%s%s?target=%s', $this->settings['handler_base'], $this->settings['login_handler'], urlencode($phpbb_url));
+
+			redirect($shib_sp_url, false, true);
+		}
 
 		return array(
-			'TEMPLATE_FILE'	=> 'login_body_shibboleth.html',
-			'TEMPLATE_VARS'	=> array(
-				'U_AUTH_SHIBBOLETH'	=> redirect($shibSpUrl, true, true),
+			'TEMPLATE_FILE'	=> '@ckws_authshibboleth/login_body_shibboleth.html',
+			'VARS'	=> array(
+				'LOGINBOX_AUTHENTICATE_SHIBBOLETH' => true,
 			),
 		);
 	}
@@ -309,14 +340,13 @@ class shibboleth extends baseProvider
 	 * This function generates an array which can be passed to the user_add function in order to create a user
 	 *
 	 * @param 	string	$username 	The username of the new user.
+	 * @param 	string	$password 	The password of the new user, may be empty
 	 * @return 	array 				Contains data that can be passed directly to the user_add function.
 	 */
 	private function newUserRow($username)
 	{
 		// first retrieve default group id
-		$sql = 'SELECT group_id
-				FROM ' . GROUPS_TABLE . "
-				WHERE group_name = '" . $this->db->sql_escape('REGISTERED') . "' AND group_type = '" . GROUP_SPECIAL . "'";
+		$sql = sprintf('SELECT group_id FROM %1$s WHERE group_name = \'%2$s\' AND group_type = \'%3$s\'', GROUPS_TABLE, $this->db->sql_escape('REGISTERED'), GROUP_SPECIAL);
 		$result = $this->db->sql_query($sql);
 		$row = $this->db->sql_fetchrow($result);
 		$this->db->sql_freeresult($result);
@@ -329,7 +359,7 @@ class shibboleth extends baseProvider
 		// generate user account data
 		return array(
 			'username'		=> $username,
-			'user_password'	=> $this->passwords_manager->hash(''),
+			'user_password'	=> '',
 			'user_email'	=> '',
 			'group_id'		=> (int)$row['group_id'],
 			'user_type'		=> USER_NORMAL,
